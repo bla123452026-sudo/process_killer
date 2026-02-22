@@ -53,7 +53,11 @@ function Open-HoofdVenster {
             $MaxSec = if($script:Data.Eenheid.$App -eq "uur"){$Lim * 3600}else{$Lim * 60}
             
             $Pnl = New-Object System.Windows.Forms.Panel; $Pnl.Size = "350,50"
-            $Lbl = New-Object System.Windows.Forms.Label; $Lbl.Text = "$App: $(Format-Tijd $Usage) / $(Format-Tijd $MaxSec)"; $Lbl.AutoSize = $true
+            $Lbl = New-Object System.Windows.Forms.Label
+            # FIX: Gebruik $(...) of ${App} om verwarring met schijfstations (C:) te voorkomen
+            $Lbl.Text = "$($App): $(Format-Tijd $Usage) / $(Format-Tijd $MaxSec)"
+            $Lbl.AutoSize = $true
+            
             $PB = New-Object System.Windows.Forms.ProgressBar; $PB.Location = "0,20"; $PB.Width = 300; $PB.Value = [Math]::Min(100, [Math]::Floor(($Usage / $MaxSec) * 100))
             
             $Pnl.Controls.AddRange(@($Lbl, $PB))
@@ -94,17 +98,22 @@ $NotifyIcon.ContextMenu = New-Object System.Windows.Forms.ContextMenu
 $NotifyIcon.ContextMenu.MenuItems.Add("Open Dashboard", { Open-HoofdVenster }) | Out-Null
 $NotifyIcon.ContextMenu.MenuItems.Add("Stop", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
 
-$NotifyIcon.ShowBalloonTip(3000, "Monitor Actief", "Het systeem wordt bewaakt.", "Info")
+$NotifyIcon.ShowBalloonTip(3000, "Monitor Actief", "Het systeem wordt bewaakt. Gebruik het icoon rechtsonder voor het dashboard.", "Info")
 
-if ($args -contains "-ShowUI") { Open-HoofdVenster }
+# Altijd het dashboard openen bij handmatige start of via de snelkoppeling
+Open-HoofdVenster
 
 # --- LOOP ---
 while($true) {
     $Procs = Get-Process -ErrorAction SilentlyContinue
     foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
         if ($Procs | Where-Object { $_.ProcessName -eq $App }) {
+            if ($null -eq $script:Data.Verbruik.$App) { $script:Data.Verbruik.$App = 0 }
             $script:Data.Verbruik.$App = [int]$script:Data.Verbruik.$App + 5
-            if ($script:Data.Verbruik.$App -ge ([int]$script:Data.Limieten.$App * 60)) {
+            
+            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { [int]$script:Data.Limieten.$App * 3600 } else { [int]$script:Data.Limieten.$App * 60 }
+            
+            if ($script:Data.Verbruik.$App -ge $MaxSec) {
                 $Procs | Where-Object { $_.ProcessName -eq $App } | Stop-Process -Force
                 $NotifyIcon.ShowBalloonTip(5000, "Limiet!", "$App gesloten.", "Warning")
             }
