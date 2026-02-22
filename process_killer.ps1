@@ -1,177 +1,151 @@
-# --- INITIALISATIE ---
-try {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-} catch { exit }
+# --- CONFIGURATIE & SETUP ---
+# Laden van Windows Forms voor de interface
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
-$LogBestand = "$env:APPDATA\AppMonitor_Settings.json"
-$script:Data = [PSCustomObject]@{
+$LogBestand = "$env:APPDATA\monitor_settings.json"
+$script:PathCache = @{} # Slaat de locatie van .exe bestanden op voor herstarten
+
+# De basisgegevens van de monitor
+$script:Data = @{
     Datum    = (Get-Date).ToString("yyyy-MM-dd")
-    Limieten = [PSCustomObject]@{}
-    Verbruik = [PSCustomObject]@{}
-    Eenheid  = [PSCustomObject]@{}
+    Limieten = @{}
+    Verbruik = @{}
+    Eenheid  = @{}
 }
 
-# --- DATA FUNCTIES ---
+# --- FUNCTIES VOOR DATA ---
+
 function Laad-Data {
     if (Test-Path $LogBestand) {
         try {
             $Geladen = Get-Content $LogBestand -Raw | ConvertFrom-Json
-            if ($null -ne $Geladen.Limieten) { $script:Data.Limieten = $Geladen.Limieten }
-            if ($null -ne $Geladen.Eenheid) { $script:Data.Eenheid = $Geladen.Eenheid }
+            if ($Geladen.Limieten) { $script:Data.Limieten = $Geladen.Limieten }
+            if ($Geladen.Eenheid) { $script:Data.Eenheid = $Geladen.Eenheid }
             if ($Geladen.Datum -eq (Get-Date).ToString("yyyy-MM-dd")) {
-                if ($null -ne $Geladen.Verbruik) { $script:Data.Verbruik = $Geladen.Verbruik }
+                if ($Geladen.Verbruik) { $script:Data.Verbruik = $Geladen.Verbruik }
+            } else {
+                # Nieuwe dag? Reset verbruik
+                $script:Data.Verbruik = @{}
+                $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd")
             }
-        } catch {
-            # Bij corrupte file, start met schone lei
-        }
+        } catch {}
     }
 }
 
 function Opslaan-Data {
-    $script:Data | ConvertTo-Json -Depth 5 | Out-File $LogBestand -Force
+    $script:Data | ConvertTo-Json | Out-File $LogBestand -Force
 }
 
-function Format-Tijd {
-    param([int]$TotaalSec)
-    $m = [Math]::Floor($TotaalSec / 60)
-    $s = $TotaalSec % 60
-    return "{0}m {1}s" -f $m, $s
-}
+# --- INTERFACE FUNCTIES ---
 
-# --- DASHBOARD UI ---
-function Open-HoofdVenster {
+function Toevoegen-App {
     $Form = New-Object System.Windows.Forms.Form
-    $Form.Text = "App Monitor Dashboard"
-    $Form.Size = "450,650"
-    $Form.StartPosition = "CenterScreen"
-    $Form.BackColor = [System.Drawing.Color]::White
-    $Form.FormBorderStyle = "FixedSingle"
-    $Form.MaximizeBox = $false
-
-    # Header
-    $Header = New-Object System.Windows.Forms.Panel
-    $Header.Size = "450,70"; $Header.BackColor = [System.Drawing.Color]::FromArgb(255, 45, 52, 71)
-    $Form.Controls.Add($Header)
-
-    $Title = New-Object System.Windows.Forms.Label
-    $Title.Text = "Mijn App Limieten"; $Title.ForeColor = "White"; $Title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
-    $Title.Location = "20,20"; $Title.AutoSize = $true
-    $Header.Controls.Add($Title)
-
-    # Invoer Sectie
-    $InputGroup = New-Object System.Windows.Forms.GroupBox
-    $InputGroup.Text = "Nieuwe App Toevoegen"; $InputGroup.Location = "20,85"; $InputGroup.Size = "390,130"
-    $Form.Controls.Add($InputGroup)
-
-    $lblN = New-Object System.Windows.Forms.Label; $lblN.Text = "Naam (bijv. chrome):"; $lblN.Location = "15,25"; $lblN.AutoSize = $true; $InputGroup.Controls.Add($lblN)
-    $txtName = New-Object System.Windows.Forms.TextBox; $txtName.Location = "15,45"; $txtName.Width = 200; $InputGroup.Controls.Add($txtName)
-
-    $lblT = New-Object System.Windows.Forms.Label; $lblT.Text = "Tijd:"; $lblT.Location = "230,25"; $lblT.AutoSize = $true; $InputGroup.Controls.Add($lblT)
-    $txtTime = New-Object System.Windows.Forms.TextBox; $txtTime.Location = "230,45"; $txtTime.Width = 60; $InputGroup.Controls.Add($txtTime)
-
-    $cmbUnit = New-Object System.Windows.Forms.ComboBox; $cmbUnit.Location = "300,45"; $cmbUnit.Width = 70
-    $cmbUnit.Items.AddRange(@("min", "uur")); $cmbUnit.SelectedIndex = 0; $cmbUnit.DropDownStyle = "DropDownList"
-    $InputGroup.Controls.Add($cmbUnit)
-
-    $btnAdd = New-Object System.Windows.Forms.Button; $btnAdd.Text = "Toevoegen"; $btnAdd.Location = "15,85"; $btnAdd.Width = 355; $btnAdd.Height = 30
-    $btnAdd.BackColor = [System.Drawing.Color]::FromArgb(255, 0, 120, 215); $btnAdd.ForeColor = "White"; $btnAdd.FlatStyle = "Flat"
-    $InputGroup.Controls.Add($btnAdd)
-
-    # Lijst Sectie
-    $Container = New-Object System.Windows.Forms.FlowLayoutPanel
-    $Container.Location = "20,230"; $Container.Size = "400,360"; $Container.AutoScroll = $true
-    $Form.Controls.Add($Container)
-
-    $Refresh = {
-        $Container.Controls.Clear()
-        foreach ($Prop in $script:Data.Limieten.PSObject.Properties) {
-            $App = $Prop.Name
-            $LimValue = $Prop.Value
-            
-            # Voorkom data types errors
-            [int]$Usage = if ($script:Data.Verbruik.$App -is [int]) { $script:Data.Verbruik.$App } else { 0 }
-            [int]$Lim = if ($LimValue -is [int]) { $LimValue } else { [int]$LimValue }
-            
-            # Bereken MaxSec en voorkom deling door nul
-            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { $Lim * 3600 } else { $Lim * 60 }
-            if ($MaxSec -le 0) { $MaxSec = 60 } # Fallback naar 1 minuut bij foutieve invoer
-
-            $Perc = [Math]::Min(100, [Math]::Floor(($Usage / $MaxSec) * 100))
-
-            $P = New-Object System.Windows.Forms.Panel; $P.Size = "370,65"; $P.BorderStyle = "FixedSingle"; $P.Margin = "0,0,0,10"
-            $P.BackColor = [System.Drawing.Color]::WhiteSmoke
-            
-            $L = New-Object System.Windows.Forms.Label; $L.Text = "$($App.ToUpper())"; $L.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold); $L.Location = "10,5"; $L.AutoSize = $true
-            $T = New-Object System.Windows.Forms.Label; $T.Text = "$(Format-Tijd $Usage) / $(Format-Tijd $MaxSec)"; $T.Location = "10,22"; $T.AutoSize = $true
-            
-            $PB = New-Object System.Windows.Forms.ProgressBar; $PB.Location = "10,40"; $PB.Width = 280; $PB.Height = 12; $PB.Value = $Perc
-            
-            $Del = New-Object System.Windows.Forms.Button; $Del.Text = "X"; $Del.Location = "330,5"; $Del.Width = 30; $Del.Height = 30; $Del.BackColor = "WhiteSmoke"
-            $Del.add_Click({
-                $script:Data.Limieten.PSObject.Properties.Remove($App)
-                $script:Data.Verbruik.PSObject.Properties.Remove($App)
-                $script:Data.Eenheid.PSObject.Properties.Remove($App)
-                Opslaan-Data; &$Refresh
-            })
-
-            $P.Controls.AddRange(@($L, $T, $PB, $Del))
-            $Container.Controls.Add($P)
-        }
-    }
-
-    $btnAdd.add_Click({
-        $n = $txtName.Text.ToLower().Trim()
-        if ($n -and $txtTime.Text -match '^\d+') {
-            $val = [int]$txtTime.Text
-            if ($val -gt 0) {
-                Add-Member -InputObject $script:Data.Limieten -NotePropertyName $n -NotePropertyValue $val -Force
-                Add-Member -InputObject $script:Data.Eenheid -NotePropertyName $n -NotePropertyValue $cmbUnit.SelectedItem -Force
-                Add-Member -InputObject $script:Data.Verbruik -NotePropertyName $n -NotePropertyValue 0 -Force
-                $txtName.Text = ""; $txtTime.Text = ""
-                Opslaan-Data; &$Refresh
-            }
+    $Form.Text = "App Toevoegen"; $Form.Size = "300,250"; $Form.Topmost = $true; $Form.StartPosition = "CenterScreen"
+    
+    $lbl = New-Object System.Windows.Forms.Label; $lbl.Text = "Naam (zonder .exe):"; $lbl.Location = "10,10"; $lbl.AutoSize = $true; $Form.Controls.Add($lbl)
+    $txt = New-Object System.Windows.Forms.TextBox; $txt.Location = "10,35"; $txt.Width = 250; $Form.Controls.Add($txt)
+    
+    $lbl2 = New-Object System.Windows.Forms.Label; $lbl2.Text = "Tijd:"; $lbl2.Location = "10,75"; $lbl2.AutoSize = $true; $Form.Controls.Add($lbl2)
+    $time = New-Object System.Windows.Forms.TextBox; $time.Location = "10,100"; $time.Width = 80; $Form.Controls.Add($time)
+    
+    $unit = New-Object System.Windows.Forms.ComboBox; $unit.Location = "100,100"; $unit.Width = 80
+    $unit.Items.AddRange(@("min", "uur")); $unit.SelectedIndex = 0; $unit.DropDownStyle = "DropDownList"; $Form.Controls.Add($unit)
+    
+    $btn = New-Object System.Windows.Forms.Button; $btn.Text = "Limiet Opslaan"; $btn.Location = "10,150"; $btn.Width = 250; $btn.Height = 40; $btn.BackColor = "LightBlue"
+    $btn.add_Click({
+        $n = $txt.Text.ToLower().Replace(".exe","").Trim()
+        if ($n -and $time.Text -match '^\d+$') {
+            $script:Data.Limieten.$n = [int]$time.Text
+            $script:Data.Eenheid.$n = $unit.SelectedItem
+            $script:Data.Verbruik.$n = 0
+            Opslaan-Data; $Form.Close()
+            $NotifyIcon.ShowBalloonTip(2000, "Succes", "$n is toegevoegd aan de monitor.", "Info")
         }
     })
-
-    &$Refresh
-    $Form.ShowDialog() | Out-Null
+    $Form.Controls.Add($btn); $Form.ShowDialog() | Out-Null
 }
 
-# --- STARTUP ---
+function Toon-Herstart-Venster {
+    $HForm = New-Object System.Windows.Forms.Form
+    $HForm.Text = "Herstarten & Resetten"; $HForm.Size = "320,350"; $HForm.StartPosition = "CenterScreen"; $HForm.Topmost = $true
+    
+    $Flow = New-Object System.Windows.Forms.FlowLayoutPanel; $Flow.Dock = "Fill"; $Flow.Padding = "10"; $HForm.Controls.Add($Flow)
+
+    $RefreshList = {
+        $Flow.Controls.Clear()
+        foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
+            $Max = if ($script:Data.Eenheid.$App -eq "uur") { $script:Data.Limieten.$App * 3600 } else { $script:Data.Limieten.$App * 60 }
+            if ($script:Data.Verbruik.$App -ge $Max) {
+                $Btn = New-Object System.Windows.Forms.Button; $Btn.Text = "Herstart $App"; $Btn.Width = 260; $Btn.Height = 35; $Btn.Margin = "0,0,0,5"
+                $Btn.add_Click({
+                    $script:Data.Verbruik.$App = 0
+                    Opslaan-Data
+                    $Pad = $script:PathCache[$App]
+                    if ($Pad -and (Test-Path $Pad)) { Start-Process -FilePath $Pad }
+                    &$RefreshList
+                })
+                $Flow.Controls.Add($Btn)
+            }
+        }
+        if ($Flow.Controls.Count -eq 0) { $HForm.Close() }
+    }
+    &$RefreshList; $HForm.ShowDialog() | Out-Null
+}
+
+# --- TRAY PICTOGRAM SETUP ---
+
 Laad-Data
 $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $NotifyIcon.Icon = [System.Drawing.SystemIcons]::Shield
 $NotifyIcon.Visible = $true
-$NotifyIcon.ContextMenu = New-Object System.Windows.Forms.ContextMenu
-$NotifyIcon.ContextMenu.MenuItems.Add("Dashboard Openen", { Open-HoofdVenster }) | Out-Null
-$NotifyIcon.ContextMenu.MenuItems.Add("Monitor Stoppen", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
+$NotifyIcon.Text = "App Monitor is actief"
 
-# Start met dashboard
-Open-HoofdVenster
+$Menu = New-Object System.Windows.Forms.ContextMenu
+$Menu.MenuItems.Add("App Toevoegen", { Toevoegen-App }) | Out-Null
+$Menu.MenuItems.Add("Apps Herstarten / Resetten", { Toon-Herstart-Venster }) | Out-Null
+$Menu.MenuItems.Add("-") | Out-Null
+$Menu.MenuItems.Add("Afsluiten", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
+$NotifyIcon.ContextMenu = $Menu
 
-# --- MONITOR LOOP ---
+# --- DE MONITOR LUS (DE MOTOR) ---
+
 while($true) {
-    $Procs = Get-Process -ErrorAction SilentlyContinue
-    foreach ($Prop in $script:Data.Limieten.PSObject.Properties) {
-        $App = $Prop.Name
-        if ($Procs | Where-Object { $_.ProcessName -eq $App }) {
-            [int]$curUsage = if ($null -ne $script:Data.Verbruik.$App) { $script:Data.Verbruik.$App } else { 0 }
-            $newUsage = $curUsage + 5
-            Add-Member -InputObject $script:Data.Verbruik -NotePropertyName $App -NotePropertyValue $newUsage -Force
+    # Controleer of de dag is gewisseld voor automatische reset
+    if ((Get-Date).ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
+        $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd")
+        $script:Data.Verbruik = @{}
+        Opslaan-Data
+    }
+    
+    $AlleProcessen = Get-Process -ErrorAction SilentlyContinue
+    
+    foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
+        $Gevonden = $AlleProcessen | Where-Object { $_.ProcessName -eq $App }
+        
+        if ($Gevonden) {
+            # Onthoud het pad voor de herstart-knop
+            if (-not $script:PathCache[$App]) {
+                try { $script:PathCache[$App] = $Gevonden[0].MainModule.FileName } catch {}
+            }
+
+            # Bereken limiet
+            $Limiet = [int]$script:Data.Limieten.$App
+            $MaxInSeconden = if ($script:Data.Eenheid.$App -eq "uur") { $Limiet * 3600 } else { $Limiet * 60 }
             
-            [int]$Lim = $Prop.Value
-            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { $Lim * 3600 } else { $Lim * 60 }
+            # Verhoog verbruik (we slapen 5 seconden per keer)
+            $Huidig = if ($script:Data.Verbruik.$App) { [int]$script:Data.Verbruik.$App } else { 0 }
+            $script:Data.Verbruik.$App = $Huidig + 5
             
-            if ($newUsage -ge $MaxSec) {
-                $Procs | Where-Object { $_.ProcessName -eq $App } | Stop-Process -Force
-                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "$App is gesloten.", "Warning")
+            # Controleer of de tijd op is
+            if ($script:Data.Verbruik.$App -ge $MaxInSeconden) {
+                # DIT SLUIT DE APP ECHT AF
+                $Gevonden | Stop-Process -Force -ErrorAction SilentlyContinue
+                $NotifyIcon.ShowBalloonTip(4000, "Tijd is op!", "De app '$App' is gesloten door de monitor.", "Warning")
             }
         }
     }
-    if ((Get-Date).ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
-        $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd")
-        $script:Data.Verbruik = [PSCustomObject]@{}
-    }
-    Opslaan-Data; Start-Sleep -Seconds 5
+    
+    Opslaan-Data
+    Start-Sleep -Seconds 5
 }
