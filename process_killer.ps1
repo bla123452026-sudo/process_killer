@@ -1,246 +1,191 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Shield, 
-  Layout, 
-  Cpu, 
-  Plus, 
-  Trash2, 
-  Clock, 
-  Settings2, 
-  AlertCircle,
-  X
-} from 'lucide-react';
+# --- INITIALISATIE & WINDOWS GUI SETUP ---
+# We laden de benodigde Windows-onderdelen voor vensters en iconen
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+} catch {
+    Write-Host "Fout bij laden van Windows Forms. Zorg dat je op Windows werkt."
+    exit
+}
 
-const App = () => {
-  const [activeTab, setActiveTab] = useState('apps');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [monitorData, setMonitorData] = useState([
-    { name: 'chrome.exe', limit: 90, current: 3665, unit: 'min', type: 'app' },
-    { name: 'roblox.exe', limit: 30, current: 1740, unit: 'min', type: 'app' },
-    { name: 'svchost.exe', limit: 4, current: 7205, unit: 'uur', type: 'proces' }
-  ]);
+# Locatie voor instellingen en verbruik (AppData map van de gebruiker)
+$LogBestand = "$env:APPDATA\ProcessKiller_Settings.json"
 
-  const [newName, setNewName] = useState('');
-  const [newTime, setNewTime] = useState('');
-  const [newUnit, setNewUnit] = useState('min');
+# De data-structuur die we gebruiken
+$script:Data = @{
+    Datum           = (Get-Date).ToString("yyyy-MM-dd")
+    Limieten        = @{} # Procesnaam = Aantal (min/uur)
+    Verbruik        = @{} # Procesnaam = Totaal verbruikte seconden vandaag
+    Eenheid         = @{} # Procesnaam = 'min' of 'uur'
+    Categorie       = @{} # Procesnaam = 'app' of 'proces'
+    LaatstGezien    = @{} # Interne timer voor berekening
+}
 
-  // Helper functie om seconden om te zetten naar u m s (voor zowel verbruik als limieten)
-  const formatTime = (totalSeconds) => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = Math.floor(totalSeconds % 60);
+# --- HULPFUNCTIES ---
 
-    let result = '';
-    if (hours > 0) result += `${hours}u `;
-    if (minutes > 0 || hours > 0) result += `${minutes}m `;
-    if (seconds > 0 || (!hours && !minutes)) result += `${seconds}s`;
-    return result.trim();
-  };
+# Zet seconden om naar een leesbaar formaat (bijv. 1u 5m 10s)
+function Format-Tijd {
+    param([int]$TotaalSeconden)
+    $Uren = [Math]::Floor($TotaalSeconden / 3600)
+    $Minuten = [Math]::Floor(($TotaalSeconden % 3600) / 60)
+    $Seconden = $TotaalSeconden % 60
+    
+    $Result = ""
+    if ($Uren -gt 0) { $Result += "$Uren" + "u " }
+    if ($Minuten -gt 0 -or $Uren -gt 0) { $Result += "$Minuten" + "m " }
+    $Result += "$Seconden" + "s"
+    return $Result.Trim()
+}
 
-  // Functie specifiek voor de limiettekst (zonder de seconden als die er niet zijn)
-  const formatLimit = (value, unit) => {
-    const seconds = unit === 'uur' ? value * 3600 : value * 60;
-    return formatTime(seconds);
-  };
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setMonitorData(prev => prev.map(item => {
-        const limitInSeconds = item.unit === 'uur' ? item.limit * 3600 : item.limit * 60;
-        if (item.current < limitInSeconds) {
-          return { ...item, current: item.current + 1 };
+# Laad opgeslagen data uit het JSON-bestand
+function Laad-Data {
+    if (Test-Path $LogBestand) {
+        try {
+            $Geladen = Get-Content $LogBestand -Raw | ConvertFrom-Json
+            if ($null -ne $Geladen.Limieten) { $script:Data.Limieten = $Geladen.Limieten }
+            if ($null -ne $Geladen.Eenheid) { $script:Data.Eenheid = $Geladen.Eenheid }
+            if ($null -ne $Geladen.Categorie) { $script:Data.Categorie = $Geladen.Categorie }
+            
+            # Alleen verbruik laden als de datum van vandaag is
+            if ($Geladen.Datum -eq (Get-Date).ToString("yyyy-MM-dd")) {
+                if ($null -ne $Geladen.Verbruik) { $script:Data.Verbruik = $Geladen.Verbruik }
+            } else {
+                $script:Data.Verbruik = @{}
+                $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd")
+            }
+        } catch {
+            Write-Warning "Kon instellingenbestand niet correct lezen."
         }
-        return item;
-      }));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const addItem = () => {
-    if (newName && newTime) {
-      setMonitorData([...monitorData, {
-        name: newName.toLowerCase().includes('.') ? newName.toLowerCase() : `${newName.toLowerCase()}.exe`,
-        limit: parseInt(newTime),
-        current: 0,
-        unit: newUnit,
-        type: activeTab === 'apps' ? 'app' : 'proces'
-      }]);
-      setNewName('');
-      setNewTime('');
-      setShowAddModal(false);
     }
-  };
+}
 
-  const removeItem = (name) => {
-    setMonitorData(monitorData.filter(i => i.name !== name));
-  };
+# Sla huidige status op naar bestand
+function Opslaan-Data {
+    $script:Data | ConvertTo-Json | Out-File $LogBestand -Force
+}
 
-  const filteredData = monitorData.filter(item => 
-    activeTab === 'apps' ? item.type === 'app' : item.type === 'proces'
-  );
+# --- INTERFACE ---
 
-  return (
-    <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans text-slate-900">
-      <div className="max-w-2xl mx-auto bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
+# Venster om een nieuwe app of proces toe te voegen
+function Toevoegen-App-Venster {
+    $Form = New-Object System.Windows.Forms.Form
+    $Form.Text = "Beheer Limieten"; $Form.Size = "350,420"; $Form.StartPosition = "CenterScreen"; $Form.Topmost = $true
+
+    $TabControl = New-Object System.Windows.Forms.TabControl
+    $TabControl.Size = "310,340"; $TabControl.Location = "12,12"
+    
+    $TabPage1 = New-Object System.Windows.Forms.TabPage; $TabPage1.Text = "Apps"
+    $TabPage2 = New-Object System.Windows.Forms.TabPage; $TabPage2.Text = "Achtergrond"
+
+    function Voeg-Tab-Controls($Tab, $Type) {
+        $label = New-Object System.Windows.Forms.Label; $label.Text = "Procesnaam (zonder .exe):"; $label.Location = "10,20"; $label.AutoSize = $true
+        $Tab.Controls.Add($label)
+
+        $input = New-Object System.Windows.Forms.TextBox; $input.Location = "10,45"; $input.Width = 260
+        $Tab.Controls.Add($input)
+
+        $label2 = New-Object System.Windows.Forms.Label; $label2.Text = "Tijdlimiet:"; $label2.Location = "10,85"; $label2.AutoSize = $true
+        $Tab.Controls.Add($label2)
+
+        $timeInput = New-Object System.Windows.Forms.TextBox; $timeInput.Location = "10,110"; $timeInput.Width = 60
+        $Tab.Controls.Add($timeInput)
+
+        $unitCombo = New-Object System.Windows.Forms.ComboBox; $unitCombo.Location = "80,110"; $unitCombo.Width = 70
+        $unitCombo.Items.AddRange(@("min", "uur")); $unitCombo.SelectedIndex = 0; $unitCombo.DropDownStyle = "DropDownList"
+        $Tab.Controls.Add($unitCombo)
+
+        $btn = New-Object System.Windows.Forms.Button; $btn.Text = "Toevoegen aan $Type"; $btn.Location = "10,160"; $btn.Width = 260; $btn.Height = 40
+        $btn.BackColor = "LightGray"
         
-        {/* Header */}
-        <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-500 rounded-lg">
-              <Shield size={24} className="text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">Process Killer Pro</h1>
-              <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">v2.5 Live Tracker</p>
-            </div>
-          </div>
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 transition-colors px-4 py-2 rounded-xl text-sm font-bold"
-          >
-            <Plus size={18} /> Nieuwe Limiet
-          </button>
-        </div>
+        $btn.add_Click({
+            $Name = $input.Text.ToLower().Replace(".exe", "").Trim()
+            if ($Name -and $timeInput.Text -match '^\d+$') {
+                $script:Data.Limieten.$Name = [int]$timeInput.Text
+                $script:Data.Eenheid.$Name = $unitCombo.SelectedItem
+                $script:Data.Categorie.$Name = if($Type -eq "Apps"){"app"}else{"proces"}
+                $script:Data.Verbruik.$Name = 0
+                Opslaan-Data
+                $Form.Close()
+            }
+        })
+        $Tab.Controls.Add($btn)
+    }
 
-        {/* Tab Selector */}
-        <div className="flex p-2 bg-slate-50 border-b border-slate-200">
-          <button 
-            onClick={() => setActiveTab('apps')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all ${activeTab === 'apps' ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <Layout size={18} /> Applicaties
-          </button>
-          <button 
-            onClick={() => setActiveTab('processen')}
-            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl transition-all ${activeTab === 'processen' ? 'bg-white shadow-sm text-orange-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            <Cpu size={18} /> Achtergrond
-          </button>
-        </div>
+    Voeg-Tab-Controls $TabPage1 "Apps"
+    Voeg-Tab-Controls $TabPage2 "Achtergrond"
+    $TabControl.Controls.Add($TabPage1); $TabControl.Controls.Add($TabPage2)
+    $Form.Controls.Add($TabControl)
+    $Form.ShowDialog() | Out-Null
+}
 
-        {/* List Content */}
-        <div className="p-6 min-h-[400px]">
-          {filteredData.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-400">
-              <Settings2 size={48} strokeWidth={1} className="mb-4 opacity-20" />
-              <p>Geen actieve limieten in deze categorie</p>
-            </div>
-          ) : (
-            <div className="space-y-8">
-              {filteredData.map((item) => {
-                const limitInSeconds = item.unit === 'uur' ? item.limit * 3600 : item.limit * 60;
-                const percentage = (item.current / limitInSeconds) * 100;
-                const isWarning = percentage > 85;
-                const isCritical = percentage >= 100;
+# --- MONITOR ENGINE ---
 
-                return (
-                  <div key={item.name} className="relative">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                          {item.name}
-                          {isCritical && <AlertCircle size={16} className="text-red-500 animate-pulse" />}
-                        </h3>
-                        <div className="flex items-center gap-3 text-slate-500 text-xs mt-1">
-                          <span className="flex items-center gap-1 font-medium bg-slate-100 px-2 py-0.5 rounded-full">
-                            <Clock size={12} /> Limiet: {formatLimit(item.limit, item.unit)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <div className={`text-sm font-mono font-bold px-3 py-1 rounded-lg ${isCritical ? 'bg-red-100 text-red-600' : isWarning ? 'bg-orange-100 text-orange-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                          {formatTime(item.current)}
-                        </div>
-                        <button 
-                          onClick={() => removeItem(item.name)}
-                          className="text-slate-300 hover:text-red-500 transition-colors mt-2 p-1"
-                          title="Verwijder limiet"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
+Laad-Data
+$NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+$NotifyIcon.Icon = [System.Drawing.SystemIcons]::Shield
+$NotifyIcon.Visible = $true
+$NotifyIcon.Text = "Process Killer Actief"
 
-                    {/* Progress Bar Container */}
-                    <div className="relative pt-1">
-                      <div className="overflow-hidden h-3 text-xs flex rounded-full bg-slate-100 border border-slate-200">
-                        <div 
-                          style={{ width: `${Math.min(percentage, 100)}%` }}
-                          className={`shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center transition-all duration-1000 ${isCritical ? 'bg-red-500' : isWarning ? 'bg-orange-500' : 'bg-indigo-500'}`}
-                        ></div>
-                      </div>
-                      <div className="flex justify-between text-[10px] mt-1 font-bold uppercase tracking-wider text-slate-400">
-                        <span>0s</span>
-                        <span>{formatLimit(item.limit, item.unit)} bereikt</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+$ContextMenu = New-Object System.Windows.Forms.ContextMenu
+$ContextMenu.MenuItems.Add("Limieten Instellen", { Toevoegen-App-Venster }) | Out-Null
+$ContextMenu.MenuItems.Add("Status Bekijken", {
+    $StatusTekst = "Verbruik Vandaag:`n"
+    $Props = $script:Data.Limieten.PSObject.Properties.Name
+    if ($null -eq $Props) { $StatusTekst += "(Geen limieten ingesteld)" }
+    foreach ($App in $Props) {
+        $Verbruikt = Format-Tijd ([int]$script:Data.Verbruik.$App)
+        $Val = [int]$script:Data.Limieten.$App
+        $TotaalSec = if($script:Data.Eenheid.$App -eq "uur"){$Val * 3600}else{$Val * 60}
+        $LimietTekst = Format-Tijd $TotaalSec
+        $StatusTekst += "- $App: $Verbruikt / $LimietTekst`n"
+    }
+    [System.Windows.Forms.MessageBox]::Show($StatusTekst, "Huidige Status")
+}) | Out-Null
+$ContextMenu.MenuItems.Add("-") | Out-Null
+$ContextMenu.MenuItems.Add("Monitor Stoppen", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
+$NotifyIcon.ContextMenu = $ContextMenu
 
-        <div className="bg-slate-50 p-4 border-t border-slate-200 flex justify-center items-center gap-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-            {monitorData.length} PROCESSEN IN GEHEUGEN
-        </div>
-      </div>
+# Hoofdloop die elke 5 seconden kijkt
+while($true) {
+    $Nu = Get-Date
+    # Controleer of de dag is gewisseld voor automatische reset
+    if ($Nu.ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
+        $script:Data.Datum = $Nu.ToString("yyyy-MM-dd")
+        $script:Data.Verbruik = @{}
+        Opslaan-Data
+    }
 
-      {showAddModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl overflow-hidden border border-slate-200">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h2 className="font-bold text-slate-800">Limiet Instellen</h2>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6 space-y-5">
-              <div>
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Proces Naam</label>
-                <input 
-                  type="text" 
-                  placeholder="bijv. chrome.exe"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-medium"
-                />
-              </div>
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Tijd</label>
-                  <input 
-                    type="number" 
-                    placeholder="0"
-                    value={newTime}
-                    onChange={(e) => setNewTime(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 font-mono font-bold text-lg"
-                  />
-                </div>
-                <div className="w-28">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Eenheid</label>
-                  <select 
-                    value={newUnit}
-                    onChange={(e) => setNewUnit(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500 appearance-none font-bold"
-                  >
-                    <option value="min">min</option>
-                    <option value="uur">uur</option>
-                  </select>
-                </div>
-              </div>
-              <button 
-                onClick={addItem}
-                className={`w-full py-5 rounded-2xl font-bold text-white transition-all shadow-xl ${activeTab === 'apps' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-orange-600 hover:bg-orange-700'}`}
-              >
-                Monitor Starten
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+    $AlleProcessen = Get-Process -ErrorAction SilentlyContinue
 
-export default App;
+    foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
+        $ProcesActive = $AlleProcessen | Where-Object { $_.ProcessName -eq $App }
+
+        if ($ProcesActive) {
+            # Bereken hoeveel tijd er verstreken is sinds de laatste check
+            if ($null -ne $script:Data.LaatstGezien.$App) {
+                $Verschil = ($Nu - [datetime]$script:Data.LaatstGezien.$App).TotalSeconds
+                # Voorkom grote sprongen als PC uit slaapstand komt (max 30 sec per check)
+                if ($Verschil -gt 0 -and $Verschil -lt 60) { 
+                    $script:Data.Verbruik.$App = [double]$script:Data.Verbruik.$App + $Verschil
+                }
+            }
+            $script:Data.LaatstGezien.$App = $Nu.ToString("yyyy-MM-dd HH:mm:ss")
+
+            # Check tegen de limiet
+            $LimietWaarde = [int]$script:Data.Limieten.$App
+            $TotaalLimietSec = if($script:Data.Eenheid.$App -eq "uur"){$LimietWaarde * 3600}else{$LimietWaarde * 60}
+
+            if ($script:Data.Verbruik.$App -ge $TotaalLimietSec) {
+                $ProcesActive | Stop-Process -Force -ErrorAction SilentlyContinue
+                $TijdGeformatteerd = Format-Tijd $TotaalLimietSec
+                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "De app $App is gesloten na $TijdGeformatteerd.", "Warning")
+            }
+        } else {
+            # Proces draait niet, zet de timer pauze indicator op null
+            $script:Data.LaatstGezien.$App = $null
+        }
+    }
+
+    Opslaan-Data
+    Start-Sleep -Seconds 5
+}
