@@ -67,36 +67,48 @@ function Toevoegen-App-Venster {
     $TabPage1 = New-Object System.Windows.Forms.TabPage; $TabPage1.Text = "Apps"
     $TabPage2 = New-Object System.Windows.Forms.TabPage; $TabPage2.Text = "Achtergrond"
 
-    function Voeg-Tab-Controls($Tab, $Type) {
+    # We gebruiken een functie om de tabs te vullen, maar we moeten zorgen dat de variabelen bereikbaar zijn
+    function Build-Tab($Tab, $Type) {
         $label = New-Object System.Windows.Forms.Label; $label.Text = "Procesnaam (zonder .exe):"; $label.Location = "10,20"; $label.AutoSize = $true
         $Tab.Controls.Add($label)
-        $input = New-Object System.Windows.Forms.TextBox; $input.Location = "10,45"; $input.Width = 260
-        $Tab.Controls.Add($input)
+        
+        $inputField = New-Object System.Windows.Forms.TextBox; $inputField.Location = "10,45"; $inputField.Width = 260
+        $Tab.Controls.Add($inputField)
+        
         $label2 = New-Object System.Windows.Forms.Label; $label2.Text = "Tijdlimiet:"; $label2.Location = "10,85"; $label2.AutoSize = $true
         $Tab.Controls.Add($label2)
-        $timeInput = New-Object System.Windows.Forms.TextBox; $timeInput.Location = "10,110"; $timeInput.Width = 60
-        $Tab.Controls.Add($timeInput)
-        $unitCombo = New-Object System.Windows.Forms.ComboBox; $unitCombo.Location = "80,110"; $unitCombo.Width = 70
-        $unitCombo.Items.AddRange(@("min", "uur")); $unitCombo.SelectedIndex = 0; $unitCombo.DropDownStyle = "DropDownList"
-        $Tab.Controls.Add($unitCombo)
-        $btn = New-Object System.Windows.Forms.Button; $btn.Text = "Toevoegen aan $Type"; $btn.Location = "10,160"; $btn.Width = 260; $btn.Height = 40; $btn.BackColor = "LightGray"
-        $btn.add_Click({
-            $Name = $input.Text.ToLower().Replace(".exe", "").Trim()
-            if ($Name -and $timeInput.Text -match '^\d+$') {
-                $script:Data.Limieten.$Name = [int]$timeInput.Text
-                $script:Data.Eenheid.$Name = $unitCombo.SelectedItem
+        
+        $timeField = New-Object System.Windows.Forms.TextBox; $timeField.Location = "10,110"; $timeField.Width = 60
+        $Tab.Controls.Add($timeField)
+        
+        $unitField = New-Object System.Windows.Forms.ComboBox; $unitField.Location = "80,110"; $unitCombo.Width = 70
+        $unitField.Items.AddRange(@("min", "uur")); $unitField.SelectedIndex = 0; $unitField.DropDownStyle = "DropDownList"
+        $Tab.Controls.Add($unitField)
+        
+        $saveBtn = New-Object System.Windows.Forms.Button; $saveBtn.Text = "Toevoegen aan $Type"; $saveBtn.Location = "10,160"; $saveBtn.Width = 260; $saveBtn.Height = 40; $saveBtn.BackColor = "LightGray"
+        
+        # De fix: we geven de velden mee aan de knop via een custom property of we gebruiken de juiste scope
+        $saveBtn.add_Click({
+            $Name = $inputField.Text.ToLower().Replace(".exe", "").Trim()
+            if ($Name -and $timeField.Text -match '^\d+$') {
+                $script:Data.Limieten.$Name = [int]$timeField.Text
+                $script:Data.Eenheid.$Name = $unitField.SelectedItem
                 $script:Data.Categorie.$Name = if($Type -eq "Apps"){"app"}else{"proces"}
                 $script:Data.Verbruik.$Name = 0
                 Opslaan-Data
                 $Form.Close()
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("Vul een geldige naam en tijd (cijfers) in.", "Fout")
             }
         })
-        $Tab.Controls.Add($btn)
+        $Tab.Controls.Add($saveBtn)
     }
 
-    Voeg-Tab-Controls $TabPage1 "Apps"
-    Voeg-Tab-Controls $TabPage2 "Achtergrond"
-    $TabControl.Controls.Add($TabPage1); $TabControl.Controls.Add($TabPage2)
+    Build-Tab $TabPage1 "Apps"
+    Build-Tab $TabPage2 "Achtergrond"
+    
+    $TabControl.Controls.Add($TabPage1)
+    $TabControl.Controls.Add($TabPage2)
     $Form.Controls.Add($TabControl)
     $Form.ShowDialog() | Out-Null
 }
@@ -107,17 +119,16 @@ Laad-Data
 $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $NotifyIcon.Icon = [System.Drawing.SystemIcons]::Shield
 $NotifyIcon.Visible = $true
-$NotifyIcon.Text = "Process Killer Actief (Rechtsklik voor menu)"
+$NotifyIcon.Text = "Process Killer Actief"
 
-# Toon een melding bij opstarten zodat je weet dat hij draait
-$NotifyIcon.ShowBalloonTip(3000, "Monitor Gestart", "Rechtsklik op het schild-icoontje rechtsonder om limieten in te stellen.", "Info")
+$NotifyIcon.ShowBalloonTip(3000, "Monitor Gestart", "Rechtsklik op het schild-icoontje rechtsonder voor het menu.", "Info")
 
 $ContextMenu = New-Object System.Windows.Forms.ContextMenu
 $ContextMenu.MenuItems.Add("Limieten Instellen", { Toevoegen-App-Venster }) | Out-Null
 $ContextMenu.MenuItems.Add("Status Bekijken", {
     $StatusTekst = "Verbruik Vandaag:`n"
     $Props = $script:Data.Limieten.PSObject.Properties.Name
-    if ($null -eq $Props) { $StatusTekst += "(Geen limieten ingesteld)" }
+    if ($null -eq $Props -or $Props.Count -eq 0) { $StatusTekst += "(Geen limieten ingesteld)" }
     foreach ($App in $Props) {
         $Verbruikt = Format-Tijd ([int]$script:Data.Verbruik.$App)
         $Val = [int]$script:Data.Limieten.$App
@@ -131,6 +142,7 @@ $ContextMenu.MenuItems.Add("-") | Out-Null
 $ContextMenu.MenuItems.Add("Monitor Stoppen", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
 $NotifyIcon.ContextMenu = $ContextMenu
 
+# Loop blijft hetzelfde
 while($true) {
     $Nu = Get-Date
     if ($Nu.ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
