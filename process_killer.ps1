@@ -5,11 +5,11 @@ try {
 } catch { exit }
 
 $LogBestand = "$env:APPDATA\AppMonitor_Settings.json"
-$script:Data = @{
+$script:Data = [PSCustomObject]@{
     Datum    = (Get-Date).ToString("yyyy-MM-dd")
-    Limieten = @{}
-    Verbruik = @{}
-    Eenheid  = @{}
+    Limieten = [PSCustomObject]@{}
+    Verbruik = [PSCustomObject]@{}
+    Eenheid  = [PSCustomObject]@{}
 }
 
 # --- DATA FUNCTIES ---
@@ -22,12 +22,14 @@ function Laad-Data {
             if ($Geladen.Datum -eq (Get-Date).ToString("yyyy-MM-dd")) {
                 if ($null -ne $Geladen.Verbruik) { $script:Data.Verbruik = $Geladen.Verbruik }
             }
-        } catch {}
+        } catch {
+            # Bij corrupte file, start met schone lei
+        }
     }
 }
 
 function Opslaan-Data {
-    $script:Data | ConvertTo-Json | Out-File $LogBestand -Force
+    $script:Data | ConvertTo-Json -Depth 5 | Out-File $LogBestand -Force
 }
 
 function Format-Tijd {
@@ -60,10 +62,9 @@ function Open-HoofdVenster {
     # Invoer Sectie
     $InputGroup = New-Object System.Windows.Forms.GroupBox
     $InputGroup.Text = "Nieuwe App Toevoegen"; $InputGroup.Location = "20,85"; $InputGroup.Size = "390,130"
-    $InputGroup.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $Form.Controls.Add($InputGroup)
 
-    $lblN = New-Object System.Windows.Forms.Label; $lblN.Text = "Naam:"; $lblN.Location = "15,25"; $lblN.AutoSize = $true; $InputGroup.Controls.Add($lblN)
+    $lblN = New-Object System.Windows.Forms.Label; $lblN.Text = "Naam (bijv. chrome):"; $lblN.Location = "15,25"; $lblN.AutoSize = $true; $InputGroup.Controls.Add($lblN)
     $txtName = New-Object System.Windows.Forms.TextBox; $txtName.Location = "15,45"; $txtName.Width = 200; $InputGroup.Controls.Add($txtName)
 
     $lblT = New-Object System.Windows.Forms.Label; $lblT.Text = "Tijd:"; $lblT.Location = "230,25"; $lblT.AutoSize = $true; $InputGroup.Controls.Add($lblT)
@@ -78,24 +79,28 @@ function Open-HoofdVenster {
     $InputGroup.Controls.Add($btnAdd)
 
     # Lijst Sectie
-    $ListTitle = New-Object System.Windows.Forms.Label
-    $ListTitle.Text = "Actief Verbruik"; $ListTitle.Location = "20,225"; $ListTitle.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $Form.Controls.Add($ListTitle)
-
     $Container = New-Object System.Windows.Forms.FlowLayoutPanel
-    $Container.Location = "20,250"; $Container.Size = "400,340"; $Container.AutoScroll = $true
+    $Container.Location = "20,230"; $Container.Size = "400,360"; $Container.AutoScroll = $true
     $Form.Controls.Add($Container)
 
-    # Refresh Functie
     $Refresh = {
         $Container.Controls.Clear()
-        foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
-            $Usage = if ($null -ne $script:Data.Verbruik.$App) { [int]$script:Data.Verbruik.$App } else { 0 }
-            $Lim = [int]$script:Data.Limieten.$App
-            $MaxSec = if($script:Data.Eenheid.$App -eq "uur"){$Lim * 3600}else{$Lim * 60}
+        foreach ($Prop in $script:Data.Limieten.PSObject.Properties) {
+            $App = $Prop.Name
+            $LimValue = $Prop.Value
+            
+            # Voorkom data types errors
+            [int]$Usage = if ($script:Data.Verbruik.$App -is [int]) { $script:Data.Verbruik.$App } else { 0 }
+            [int]$Lim = if ($LimValue -is [int]) { $LimValue } else { [int]$LimValue }
+            
+            # Bereken MaxSec en voorkom deling door nul
+            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { $Lim * 3600 } else { $Lim * 60 }
+            if ($MaxSec -le 0) { $MaxSec = 60 } # Fallback naar 1 minuut bij foutieve invoer
+
             $Perc = [Math]::Min(100, [Math]::Floor(($Usage / $MaxSec) * 100))
 
             $P = New-Object System.Windows.Forms.Panel; $P.Size = "370,65"; $P.BorderStyle = "FixedSingle"; $P.Margin = "0,0,0,10"
+            $P.BackColor = [System.Drawing.Color]::WhiteSmoke
             
             $L = New-Object System.Windows.Forms.Label; $L.Text = "$($App.ToUpper())"; $L.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold); $L.Location = "10,5"; $L.AutoSize = $true
             $T = New-Object System.Windows.Forms.Label; $T.Text = "$(Format-Tijd $Usage) / $(Format-Tijd $MaxSec)"; $T.Location = "10,22"; $T.AutoSize = $true
@@ -106,6 +111,7 @@ function Open-HoofdVenster {
             $Del.add_Click({
                 $script:Data.Limieten.PSObject.Properties.Remove($App)
                 $script:Data.Verbruik.PSObject.Properties.Remove($App)
+                $script:Data.Eenheid.PSObject.Properties.Remove($App)
                 Opslaan-Data; &$Refresh
             })
 
@@ -117,11 +123,14 @@ function Open-HoofdVenster {
     $btnAdd.add_Click({
         $n = $txtName.Text.ToLower().Trim()
         if ($n -and $txtTime.Text -match '^\d+') {
-            $script:Data.Limieten.$n = [int]$txtTime.Text
-            $script:Data.Eenheid.$n = $cmbUnit.SelectedItem
-            $script:Data.Verbruik.$n = 0
-            $txtName.Text = ""; $txtTime.Text = ""
-            Opslaan-Data; &$Refresh
+            $val = [int]$txtTime.Text
+            if ($val -gt 0) {
+                Add-Member -InputObject $script:Data.Limieten -NotePropertyName $n -NotePropertyValue $val -Force
+                Add-Member -InputObject $script:Data.Eenheid -NotePropertyName $n -NotePropertyValue $cmbUnit.SelectedItem -Force
+                Add-Member -InputObject $script:Data.Verbruik -NotePropertyName $n -NotePropertyValue 0 -Force
+                $txtName.Text = ""; $txtTime.Text = ""
+                Opslaan-Data; &$Refresh
+            }
         }
     })
 
@@ -138,29 +147,31 @@ $NotifyIcon.ContextMenu = New-Object System.Windows.Forms.ContextMenu
 $NotifyIcon.ContextMenu.MenuItems.Add("Dashboard Openen", { Open-HoofdVenster }) | Out-Null
 $NotifyIcon.ContextMenu.MenuItems.Add("Monitor Stoppen", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
 
-$NotifyIcon.ShowBalloonTip(3000, "Monitor Gestart", "Klik op het icoon rechtsonder voor het dashboard.", "Info")
-
-# Altijd dashboard tonen bij handmatige start
+# Start met dashboard
 Open-HoofdVenster
 
 # --- MONITOR LOOP ---
 while($true) {
     $Procs = Get-Process -ErrorAction SilentlyContinue
-    foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
+    foreach ($Prop in $script:Data.Limieten.PSObject.Properties) {
+        $App = $Prop.Name
         if ($Procs | Where-Object { $_.ProcessName -eq $App }) {
-            if ($null -eq $script:Data.Verbruik.$App) { $script:Data.Verbruik.$App = 0 }
-            $script:Data.Verbruik.$App = [int]$script:Data.Verbruik.$App + 5
+            [int]$curUsage = if ($null -ne $script:Data.Verbruik.$App) { $script:Data.Verbruik.$App } else { 0 }
+            $newUsage = $curUsage + 5
+            Add-Member -InputObject $script:Data.Verbruik -NotePropertyName $App -NotePropertyValue $newUsage -Force
             
-            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { [int]$script:Data.Limieten.$App * 3600 } else { [int]$script:Data.Limieten.$App * 60 }
+            [int]$Lim = $Prop.Value
+            $MaxSec = if($script:Data.Eenheid.$App -eq "uur") { $Lim * 3600 } else { $Lim * 60 }
             
-            if ($script:Data.Verbruik.$App -ge $MaxSec) {
+            if ($newUsage -ge $MaxSec) {
                 $Procs | Where-Object { $_.ProcessName -eq $App } | Stop-Process -Force
-                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "$App is gesloten omdat de limiet is bereikt.", "Warning")
+                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "$App is gesloten.", "Warning")
             }
         }
     }
     if ((Get-Date).ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
-        $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd"); $script:Data.Verbruik = @{}; Laad-Data
+        $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd")
+        $script:Data.Verbruik = [PSCustomObject]@{}
     }
     Opslaan-Data; Start-Sleep -Seconds 5
 }
