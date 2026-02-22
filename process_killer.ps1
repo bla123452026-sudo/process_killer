@@ -53,6 +53,7 @@ function Open-HoofdVenster {
     $Form.BackColor = [System.Drawing.Color]::FromArgb(255, 250, 250, 250)
     $Form.StartPosition = "CenterScreen"; $Form.FormBorderStyle = "FixedSingle"
     $Form.Icon = [System.Drawing.SystemIcons]::Shield
+    $Form.Topmost = $true
 
     # Header
     $Header = New-Object System.Windows.Forms.Panel
@@ -64,7 +65,7 @@ function Open-HoofdVenster {
     $Title.Location = "20,20"; $Title.AutoSize = $true
     $Header.Controls.Add($Title)
 
-    # Content Area (Scrollbaar)
+    # Content Area
     $Content = New-Object System.Windows.Forms.FlowLayoutPanel
     $Content.Location = "0,80"; $Content.Size = "400,380"; $Content.AutoScroll = $true
     $Content.Padding = New-Object System.Windows.Forms.Padding(10)
@@ -72,16 +73,22 @@ function Open-HoofdVenster {
 
     function Refresh-Lijst {
         $Content.Controls.Clear()
-        foreach ($App in $script:Data.Limieten.PSObject.Properties.Name) {
+        $Props = $script:Data.Limieten.PSObject.Properties.Name
+        if ($null -eq $Props -or $Props.Count -eq 0) {
+            $EmptyLbl = New-Object System.Windows.Forms.Label
+            $EmptyLbl.Text = "Geen actieve limieten."; $EmptyLbl.AutoSize = $true; $EmptyLbl.ForeColor = "Gray"
+            $Content.Controls.Add($EmptyLbl)
+        }
+        foreach ($App in $Props) {
             $ItemBox = New-Object System.Windows.Forms.Panel
             $ItemBox.Size = "350,70"; $ItemBox.Margin = New-Object System.Windows.Forms.Padding(0,0,0,10)
-            $ItemBox.BackColor = "White"; $ItemBox.BorderStyle = "None"
+            $ItemBox.BackColor = "White"
             
             $AppNameLabel = New-Object System.Windows.Forms.Label
             $AppNameLabel.Text = $App.ToUpper(); $AppNameLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
             $AppNameLabel.Location = "10,5"; $AppNameLabel.AutoSize = $true
             
-            $Usage = [int]$script:Data.Verbruik.$App
+            $Usage = if ($null -ne $script:Data.Verbruik.$App) { [int]$script:Data.Verbruik.$App } else { 0 }
             $Lim = [int]$script:Data.Limieten.$App
             $MaxSec = if($script:Data.Eenheid.$App -eq "uur"){$Lim * 3600}else{$Lim * 60}
             
@@ -96,7 +103,7 @@ function Open-HoofdVenster {
             
             $DelBtn = New-Object System.Windows.Forms.Button
             $DelBtn.Text = "X"; $DelBtn.Location = "310,10"; $DelBtn.Width = 30; $DelBtn.Height = 30
-            $DelBtn.FlatStyle = "Flat"; $DelBtn.FlatAppearance.BorderSize = 0; $DelBtn.BackColor = "#FFE0E0"
+            $DelBtn.FlatStyle = "Flat"; $DelBtn.FlatAppearance.BorderSize = 0; $DelBtn.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 224, 224)
             $DelBtn.add_Click({
                 $script:Data.Limieten.PSObject.Properties.Remove($App)
                 $script:Data.Verbruik.PSObject.Properties.Remove($App)
@@ -108,19 +115,15 @@ function Open-HoofdVenster {
         }
     }
 
-    # Footer (Add Button)
     $Footer = New-Object System.Windows.Forms.Panel
     $Footer.Size = "400,100"; $Footer.Dock = "Bottom"
     $Form.Controls.Add($Footer)
 
     $AddBtn = New-Object System.Windows.Forms.Button
     $AddBtn.Text = "+ Limiet Toevoegen"; $AddBtn.Size = "340,45"; $AddBtn.Location = "20,10"
-    $AddBtn.FlatStyle = "Flat"; $AddBtn.BackColor = "#3F51B5"; $AddBtn.ForeColor = "White"
+    $AddBtn.FlatStyle = "Flat"; $AddBtn.BackColor = [System.Drawing.Color]::FromArgb(255, 63, 81, 181); $AddBtn.ForeColor = "White"
     $AddBtn.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $AddBtn.add_Click({
-        Toevoegen-App-Popup
-        Refresh-Lijst
-    })
+    $AddBtn.add_Click({ Toevoegen-App-Popup; Refresh-Lijst })
     $Footer.Controls.Add($AddBtn)
 
     Refresh-Lijst
@@ -129,25 +132,25 @@ function Open-HoofdVenster {
 
 function Toevoegen-App-Popup {
     $Popup = New-Object System.Windows.Forms.Form
-    $Popup.Text = "Nieuwe App"; $Popup.Size = "300,250"; $Popup.StartPosition = "CenterParent"
+    $Popup.Text = "Nieuwe App"; $Popup.Size = "300,250"; $Popup.StartPosition = "CenterParent"; $Popup.Topmost = $true
     
-    $l1 = New-Object System.Windows.Forms.Label; $l1.Text = "Naam:"; $l1.Location = "20,20"; $Popup.Controls.Add($l1)
+    $l1 = New-Object System.Windows.Forms.Label; $l1.Text = "Procesnaam (zonder .exe):"; $l1.Location = "20,20"; $l1.AutoSize = $true; $Popup.Controls.Add($l1)
     $t1 = New-Object System.Windows.Forms.TextBox; $t1.Location = "20,40"; $t1.Width = 240; $Popup.Controls.Add($t1)
     
     $l2 = New-Object System.Windows.Forms.Label; $l2.Text = "Tijd:"; $l2.Location = "20,80"; $Popup.Controls.Add($l2)
     $t2 = New-Object System.Windows.Forms.TextBox; $t2.Location = "20,100"; $t2.Width = 80; $Popup.Controls.Add($t2)
     
     $c1 = New-Object System.Windows.Forms.ComboBox; $c1.Location = "110,100"; $c1.Width = 80
-    $c1.Items.AddRange(@("min", "uur")); $c1.SelectedIndex = 0; $Popup.Controls.Add($c1)
+    $c1.Items.AddRange(@("min", "uur")); $c1.SelectedIndex = 0; $c1.DropDownStyle = "DropDownList"; $Popup.Controls.Add($c1)
     
     $b1 = New-Object System.Windows.Forms.Button; $b1.Text = "Opslaan"; $b1.Location = "20,150"; $b1.Width = 240; $b1.Height = 40
-    $b1.BackColor = "#3F51B5"; $b1.ForeColor = "White"; $b1.FlatStyle = "Flat"
+    $b1.BackColor = [System.Drawing.Color]::FromArgb(255, 63, 81, 181); $b1.ForeColor = "White"; $b1.FlatStyle = "Flat"
     $b1.add_Click({
         $name = $t1.Text.ToLower().Replace(".exe","").Trim()
         if ($name -and $t2.Text -match '^\d+$') {
             $script:Data.Limieten.$name = [int]$t2.Text
             $script:Data.Eenheid.$name = $c1.SelectedItem
-            $script:Data.Verbruik.$name = 0
+            if ($null -eq $script:Data.Verbruik.$name) { $script:Data.Verbruik.$name = 0 }
             Opslaan-Data; $Popup.Close()
         }
     })
@@ -155,7 +158,7 @@ function Toevoegen-App-Popup {
     $Popup.ShowDialog() | Out-Null
 }
 
-# --- SYSTEM TRAY ---
+# --- SYSTRAY SETUP ---
 Laad-Data
 $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
 $NotifyIcon.Icon = [System.Drawing.SystemIcons]::Shield
@@ -168,14 +171,16 @@ $Menu.MenuItems.Add("-") | Out-Null
 $Menu.MenuItems.Add("Stop Monitor", { $NotifyIcon.Visible = $false; Stop-Process -Id $PID }) | Out-Null
 $NotifyIcon.ContextMenu = $Menu
 
-# --- MAIN LOOP ---
-# Als het script gestart is met het argument "-ShowUI", open dan direct het venster
+# Toon opstartmelding
+$NotifyIcon.ShowBalloonTip(3000, "Monitor Actief", "De proces monitor draait op de achtergrond.", "Info")
+
+# Check of we direct de UI moeten openen
 if ($args -contains "-ShowUI") {
     $null = [threading.Thread]::new({ Open-HoofdVenster }).Start()
 }
 
+# --- MAIN LOOP ---
 while($true) {
-    # Dagelijkse reset check
     if ((Get-Date).ToString("yyyy-MM-dd") -ne $script:Data.Datum) {
         $script:Data.Datum = (Get-Date).ToString("yyyy-MM-dd"); $script:Data.Verbruik = @{}
     }
@@ -187,12 +192,12 @@ while($true) {
             $L = [int]$script:Data.Limieten.$App
             $MaxSec = if($script:Data.Eenheid.$App -eq "uur"){$L * 3600}else{$L * 60}
             
-            if ($null -eq $script:Data.Verbruik.$App) { $script:Data.Verbruik.$name = 0 }
+            if ($null -eq $script:Data.Verbruik.$App) { $script:Data.Verbruik.$App = 0 }
             $script:Data.Verbruik.$App = [double]$script:Data.Verbruik.$App + 5
             
             if ($script:Data.Verbruik.$App -ge $MaxSec) {
                 $P | Stop-Process -Force -ErrorAction SilentlyContinue
-                $NotifyIcon.ShowBalloonTip(3000, "Limiet Bereikt", "App $App is gesloten.", "Warning")
+                $NotifyIcon.ShowBalloonTip(5000, "Limiet Bereikt", "De app $App is gesloten omdat de tijd op is.", "Warning")
             }
         }
     }
