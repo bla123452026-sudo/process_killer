@@ -137,7 +137,8 @@ $ContextMenu.MenuItems.Add("Status Bekijken", {
         $Val = [int]$script:Data.Limieten.$App
         $TotaalSec = if($script:Data.Eenheid.$App -eq "uur"){$Val * 3600}else{$Val * 60}
         $LimietTekst = Format-Tijd $TotaalSec
-        $StatusTekst += "- $App: $Verbruikt / $LimietTekst`n"
+        # FIX: Gebruik van ${} voorkomt 'InvalidVariableReferenceWithDrive' error door de dubbele punt
+        $StatusTekst += "- ${App}: ${Verbruikt} / ${LimietTekst}`n"
     }
     [System.Windows.Forms.MessageBox]::Show($StatusTekst, "Huidige Status")
 }) | Out-Null
@@ -164,7 +165,7 @@ while($true) {
             # Bereken hoeveel tijd er verstreken is sinds de laatste check
             if ($null -ne $script:Data.LaatstGezien.$App) {
                 $Verschil = ($Nu - [datetime]$script:Data.LaatstGezien.$App).TotalSeconds
-                # Voorkom grote sprongen als PC uit slaapstand komt (max 30 sec per check)
+                # Voorkom grote sprongen als PC uit slaapstand komt (max 60 sec per check)
                 if ($Verschil -gt 0 -and $Verschil -lt 60) { 
                     $script:Data.Verbruik.$App = [double]$script:Data.Verbruik.$App + $Verschil
                 }
@@ -178,7 +179,7 @@ while($true) {
             if ($script:Data.Verbruik.$App -ge $TotaalLimietSec) {
                 $ProcesActive | Stop-Process -Force -ErrorAction SilentlyContinue
                 $TijdGeformatteerd = Format-Tijd $TotaalLimietSec
-                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "De app $App is gesloten na $TijdGeformatteerd.", "Warning")
+                $NotifyIcon.ShowBalloonTip(5000, "Tijd is op!", "De app ${App} is gesloten na ${TijdGeformatteerd}.", "Warning")
             }
         } else {
             # Proces draait niet, zet de timer pauze indicator op null
